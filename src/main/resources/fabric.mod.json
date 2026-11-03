@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "blaulixmap",
+  "version": "${version}",
+  "name": "Blaulix Map & Claims",
+  "description": "Serverseitige 2D-Webkarte (Chunky-kompatibel) mit Polygon-Claims, Web-Login und Web-Editor.",
+  "authors": ["Blaulix"],
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": ["at.blaulix.blaulixmap.BlaulixMap"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": ">=26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
