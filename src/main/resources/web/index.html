@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blaulix Map & Claims</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+<style>
+  :root { --bg:#10151c; --panel:#18202b; --line:#2a3646; --text:#e6edf5; --muted:#8fa0b5; --accent:#3d9cff; --danger:#ff5d5d; --ok:#45d483; }
+  * { box-sizing: border-box; }
+  html, body { height:100%; margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  #top { position:fixed; inset:0 0 auto 0; height:48px; display:flex; align-items:center; gap:10px; padding:0 12px; background:var(--panel); border-bottom:1px solid var(--line); z-index:1000; }
+  #top h1 { font-size:16px; margin:0 12px 0 0; white-space:nowrap; }
+  #map { position:fixed; inset:48px 0 0 0; background:#0b0f14; }
+  button { background:#223044; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:6px 12px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--accent); }
+  button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--danger); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .spacer { flex:1; }
+  #user { font-size:13px; color:var(--muted); }
+  #user b { color:var(--ok); }
+  #side { position:fixed; top:48px; right:0; bottom:0; width:310px; background:var(--panel); border-left:1px solid var(--line); z-index:900; display:flex; flex-direction:column; transition:transform .2s; }
+  #side.hidden { transform:translateX(100%); }
+  #tabs { display:flex; border-bottom:1px solid var(--line); }
+  #tabs button { flex:1; border:0; border-radius:0; background:transparent; padding:10px; }
+  #tabs button.active { background:#223044; color:var(--text); border-bottom:2px solid var(--accent); }
+  #lists { flex:1; overflow:auto; padding:8px; }
+  .item { padding:8px; border:1px solid var(--line); border-radius:6px; margin-bottom:6px; font-size:13px; cursor:pointer; }
+  .item:hover { border-color:var(--accent); }
+  .item small { color:var(--muted); display:block; margin-top:2px; }
+  .item .row { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  #toggleSide { position:fixed; top:60px; right:322px; z-index:950; }
+  #side.hidden ~ #toggleSide { right:12px; }
+  #coords { position:fixed; left:10px; bottom:10px; z-index:900; background:rgba(16,21,28,.85); padding:4px 10px; border-radius:6px; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #editorBar { position:fixed; left:50%; transform:translateX(-50%); top:60px; z-index:950; background:var(--panel); border:1px solid var(--accent); border-radius:8px; padding:8px 12px; display:none; gap:8px; align-items:center; font-size:13px; }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none; align-items:center; justify-content:center; z-index:2000; }
+  .modal.show { display:flex; }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px; width:min(380px,92vw); }
+  .box h2 { margin:0 0 12px; font-size:18px; }
+  .box input { width:100%; padding:9px 10px; margin:6px 0 12px; border-radius:6px; border:1px solid var(--line); background:#0f151d; color:var(--text); font-size:15px; }
+  .box .tabs { display:flex; gap:6px; margin-bottom:10px; }
+  .box .tabs button { flex:1; }
+  .box .actions { display:flex; justify-content:flex-end; gap:8px; }
+  .err { color:var(--danger); font-size:13px; min-height:18px; margin-bottom:6px; }
+  #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); background:#223044; border:1px solid var(--line); padding:10px 16px; border-radius:8px; z-index:3000; display:none; font-size:14px; }
+  .pl { background:rgba(16,21,28,.85); border:1px solid var(--line); color:var(--text); font-size:11px; padding:1px 5px; box-shadow:none; }
+  .leaflet-container { font-family:inherit; }
+  .leaflet-tooltip.cl { background:var(--panel); color:var(--text); border:1px solid var(--line); }
+  @media (max-width:700px){ #side{width:78vw;} #toggleSide{right:calc(78vw + 12px);} #top h1{display:none;} }
+</style>
+</head>
+<body>
+<div id="top">
+  <h1>🗺️ Blaulix Map</h1>
+  <div id="dimBtns"></div>
+  <span class="spacer"></span>
+  <button id="drawBtn" style="display:none">✏️ Claim zeichnen</button>
+  <span id="user"></span>
+  <button id="loginBtn" class="primary">Login</button>
+  <button id="logoutBtn" style="display:none">Logout</button>
+</div>
+<div id="map"></div>
+<div id="coords">X: – Z: –</div>
+
+<div id="side">
+  <div id="tabs">
+    <button data-tab="players" class="active">Spieler</button>
+    <button data-tab="claims">Claims</button>
+    <button data-tab="admin" id="adminTab" style="display:none">Admin</button>
+  </div>
+  <div id="lists"></div>
+</div>
+<button id="toggleSide">☰</button>
+
+<div id="editorBar">
+  <span id="editorHint">Klicke auf die Karte, um Eckpunkte zu setzen. Zum Abschließen auf den ersten oder letzten Punkt klicken.</span>
+  <button id="undoPoint">Punkt zurück</button>
+  <button id="cancelDraw" class="danger">Abbrechen</button>
+</div>
+
+<!-- Login-Modal -->
+<div class="modal" id="loginModal"><div class="box">
+  <h2>Login</h2>
+  <div class="tabs"><button id="tabCode" class="active">Ingame-Code</button><button id="tabAdmin">Admin</button></div>
+  <div id="codeForm">
+    <div style="font-size:13px;color:var(--muted)">Gib <b>/map login</b> im Spiel ein und trage hier den 6-stelligen Code ein (5&nbsp;Min. gültig).</div>
+    <input id="codeInput" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="off">
+  </div>
+  <div id="adminForm" style="display:none">
+    <input id="adminInput" type="password" placeholder="Admin-Passwort" autocomplete="current-password">
+  </div>
+  <div class="err" id="loginErr"></div>
+  <div class="actions"><button id="loginCancel">Abbrechen</button><button id="loginSubmit" class="primary">Anmelden</button></div>
+</div></div>
+
+<!-- Claim-Name-Modal -->
+<div class="modal" id="nameModal"><div class="box">
+  <h2>Claim speichern</h2>
+  <div id="claimInfo" style="font-size:13px;color:var(--muted)"></div>
+  <input id="claimName" maxlength="32" placeholder="Name des Claims" autocomplete="off">
+  <div class="err" id="nameErr"></div>
+  <div class="actions"><button id="nameCancel">Verwerfen</button><button id="nameSubmit" class="primary">Speichern</button></div>
+</div></div>
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const DIMS = { overworld:'Overworld', nether:'Nether', end:'End' };
+  let cfg = { maxClaimsPerPlayer:3, maxClaimAreaBlocks:10000, dimensions:['overworld','nether','end'] };
+  let session = { loggedIn:false };
+  let token = null;
+  try { token = localStorage.getItem('blaulix_token'); } catch (e) {}
+  let dim = 'overworld', tab = 'players';
+  let players = [], claims = [];
+  let tileLayer = null, drawer = null, pendingPts = null;
+  const claimLayers = L.layerGroup(), playerLayers = L.layerGroup();
+
+  // Koordinaten: lng = X, lat = -Z  (CRS.Simple, 1 Einheit = 1 Block bei Zoom 0)
+  const toLL = (x, z) => [-z, x];
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  const map = L.map('map', { crs:L.CRS.Simple, minZoom:-4, maxZoom:2, zoomSnap:1, attributionControl:false, zoomControl:true });
+  map.setView([0, 0], 0);
+  claimLayers.addTo(map); playerLayers.addTo(map);
+  map.on('mousemove', e => { $('coords').textContent = `X: ${Math.round(e.latlng.lng)}  Z: ${Math.round(-e.latlng.lat)}`; });
+
+  function toast(msg, ms = 3000) {
+    const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+    clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', ms);
+  }
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign({ 'Content-Type':'application/json' }, opts.headers || {});
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+    let data = null; try { data = await res.json(); } catch (e) {}
+    if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+    return data;
+  }
+
+  // ---------- Dimensionen / Kacheln ----------
+  function buildDimButtons() {
+    const box = $('dimBtns'); box.innerHTML = '';
+    for (const d of Object.keys(DIMS)) {
+      const b = document.createElement('button');
+      b.textContent = DIMS[d]; b.dataset.dim = d; b.style.marginRight = '4px';
+      if (d === dim) b.classList.add('active');
+      if (cfg.dimensions && cfg.dimensions.length && !cfg.dimensions.includes(d)) b.style.opacity = '.5';
+      b.onclick = () => setDim(d);
+      box.appendChild(b);
+    }
+  }
+  function setDim(d) {
+    dim = d;
+    if (tileLayer) map.removeLayer(tileLayer);
+    // Server-Zoom z = Leaflet-Zoom + 4 (z=4: 1 Pixel pro Block)
+    tileLayer = L.tileLayer(`/tiles/${d}/{z}/{x}/{y}.png`, {
+      tileSize:256, zoomOffset:4, minZoom:-4, maxZoom:2, minNativeZoom:-4, maxNativeZoom:0,
+      noWrap:true, keepBuffer:4, updateWhenIdle:true
+    }).addTo(map);
+    buildDimButtons(); drawClaims(); drawPlayers(); renderList();
+  }
+
+  // ---------- Spieler ----------
+  async function loadPlayers() {
+    try { players = await api('/api/players'); } catch (e) { players = []; }
+    drawPlayers(); if (tab === 'players') renderList();
+  }
+  function drawPlayers() {
+    playerLayers.clearLayers();
+    for (const p of players) {
+      if (p.dimension !== dim) continue;
+      L.circleMarker(toLL(p.x, p.z), { radius:6, color:'#fff', weight:2, fillColor:'#3d9cff', fillOpacity:1 })
+        .bindTooltip(esc(p.name), { permanent:true, direction:'top', offset:[0,-6], className:'pl' })
+        .addTo(playerLayers);
+    }
+  }
+
+  // ---------- Claims ----------
+  function colorFor(s) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return `hsl(${h % 360},75%,58%)`; }
+  async function loadClaims() {
+    try { claims = await api('/api/claims'); } catch (e) { claims = []; }
+    drawClaims(); if (tab !== 'players') renderList();
+  }
+  function drawClaims() {
+    claimLayers.clearLayers();
+    for (const c of claims) {
+      if (c.dimension !== dim) continue;
+      const col = colorFor(c.owner);
+      L.polygon(c.points.map(p => toLL(p[0], p[1])), { color:col, weight:2, fillColor:col, fillOpacity:.25 })
+        .bindTooltip(`<b>${esc(c.name)}</b><br>Besitzer: ${esc(c.ownerName)}<br>Fläche: ${Math.round(c.area)} Blöcke<br>Dimension: ${esc(DIMS[c.dimension] || c.dimension)}`,
+                     { sticky:true, className:'cl' })
+        .addTo(claimLayers);
+    }
+  }
+  function canDelete(c) { return session.loggedIn && (session.admin || c.owner === session.uuid); }
+  async function deleteClaim(c) {
+    if (!confirm(`Claim "${c.name}" wirklich löschen?`)) return;
+    try { await api('/api/claims/delete-web?name=' + encodeURIComponent(c.name), { method:'DELETE' }); toast('Claim gelöscht'); loadClaims(); }
+    catch (e) { toast('Fehler: ' + e.message); }
+  }
+  function centroid(c) { let x = 0, z = 0; for (const p of c.points) { x += p[0]; z += p[1]; } return [x / c.points.length, z / c.points.length]; }
+
+  // ---------- Seitenleiste ----------
+  function renderList() {
+    const box = $('lists'); box.innerHTML = '';
+    if (tab === 'players') {
+      if (!players.length) box.innerHTML = '<div class="item"><small>Keine Spieler online.</small></div>';
+      for (const p of players) {
+        const d = document.createElement('div'); d.className = 'item';
+        d.innerHTML = `<b>${esc(p.name)}</b><small>${esc(DIMS[p.dimension] || p.dimension)} · X ${Math.round(p.x)} Y ${Math.round(p.y)} Z ${Math.round(p.z)}</small>`;
+        d.onclick = () => { if (p.dimension !== dim && DIMS[p.dimension]) setDim(p.dimension); map.setView(toLL(p.x, p.z), 0); };
+        box.appendChild(d);
+      }
+    } else {
+      const all = tab === 'admin';
+      let list = claims.filter(c => all ? true : (c.dimension === dim));
+      if (!all && session.loggedIn && !session.admin) list = list.slice().sort((a, b) => (b.owner === session.uuid) - (a.owner === session.uuid));
+      if (all) {
+        const h = document.createElement('div'); h.className = 'item'; h.style.cursor = 'default';
+        h.innerHTML = `<b>Admin-Dashboard</b><small>${claims.length} Claims insgesamt · Limit ${cfg.maxClaimsPerPlayer}/Spieler, ${cfg.maxClaimAreaBlocks} Blöcke</small>`;
+        box.appendChild(h);
+      }
+      if (!list.length) box.innerHTML += '<div class="item"><small>Keine Claims.</small></div>';
+      for (const c of list) {
+        const d = document.createElement('div'); d.className = 'item';
+        d.innerHTML = `<div class="row"><b style="color:${colorFor(c.owner)}">${esc(c.name)}</b></div>
+          <small>${esc(c.ownerName)} · ${Math.round(c.area)} Blöcke · ${esc(DIMS[c.dimension] || c.dimension)}</small>`;
+        if (canDelete(c)) {
+          const b = document.createElement('button'); b.textContent = 'Löschen'; b.className = 'danger'; b.style.marginTop = '6px';
+          b.onclick = ev => { ev.stopPropagation(); deleteClaim(c); };
+          d.appendChild(b);
+        }
+        d.onclick = () => { if (c.dimension !== dim) setDim(c.dimension); const m = centroid(c); map.setView(toLL(m[0], m[1]), 0); };
+        box.appendChild(d);
+      }
+    }
+  }
+  document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => {
+    tab = b.dataset.tab;
+    document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('active', x === b));
+    renderList();
+  });
+  $('toggleSide').onclick = () => $('side').classList.toggle('hidden');
+
+  // ---------- Login ----------
+  function applySession() {
+    $('loginBtn').style.display = session.loggedIn ? 'none' : '';
+    $('logoutBtn').style.display = session.loggedIn ? '' : 'none';
+    $('drawBtn').style.display = session.loggedIn ? '' : 'none';
+    $('adminTab').style.display = session.admin ? '' : 'none';
+    $('user').innerHTML = session.loggedIn
+      ? (session.admin ? '🛡️ <b>Admin</b>' : `Eingeloggt als <b>${esc(session.name)}</b>`) : '';
+    if (!session.admin && tab === 'admin') { tab = 'claims'; }
+    renderList();
+  }
+  async function loadSession() {
+    try { session = await api('/api/session'); } catch (e) { session = { loggedIn:false }; }
+    if (!session.loggedIn) { token = null; try { localStorage.removeItem('blaulix_token'); } catch (e) {} }
+    applySession();
+  }
+  let loginMode = 'code';
+  function setLoginMode(m) {
+    loginMode = m;
+    $('codeForm').style.display = m === 'code' ? '' : 'none';
+    $('adminForm').style.display = m === 'admin' ? '' : 'none';
+    $('tabCode').classList.toggle('active', m === 'code');
+    $('tabAdmin').classList.toggle('active', m === 'admin');
+    $('loginErr').textContent = '';
+  }
+  $('tabCode').onclick = () => setLoginMode('code');
+  $('tabAdmin').onclick = () => setLoginMode('admin');
+  $('loginBtn').onclick = () => { $('loginModal').classList.add('show'); setLoginMode('code'); $('codeInput').focus(); };
+  $('loginCancel').onclick = () => $('loginModal').classList.remove('show');
+  async function doLogin() {
+    $('loginErr').textContent = '';
+    try {
+      const res = loginMode === 'code'
+        ? await api('/api/auth/code', { method:'POST', body:JSON.stringify({ code:$('codeInput').value.trim() }) })
+        : await api('/api/auth/admin', { method:'POST', body:JSON.stringify({ password:$('adminInput').value }) });
+      token = res.token; try { localStorage.setItem('blaulix_token', token); } catch (e) {}
+      session = res; $('codeInput').value = ''; $('adminInput').value = '';
+      $('loginModal').classList.remove('show'); applySession();
+      toast(res.admin ? 'Als Admin eingeloggt' : `Verknüpft mit Minecraft-Account ${res.name}`);
+    } catch (e) { $('loginErr').textContent = e.message; }
+  }
+  $('loginSubmit').onclick = doLogin;
+  ['codeInput', 'adminInput'].forEach(id => $(id).addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); }));
+  $('logoutBtn').onclick = async () => {
+    try { await api('/api/auth/logout', { method:'POST' }); } catch (e) {}
+    token = null; try { localStorage.removeItem('blaulix_token'); } catch (e) {}
+    session = { loggedIn:false }; applySession(); toast('Ausgeloggt');
+  };
+
+  // ---------- Web-Claim-Editor ----------
+  function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; s += a[0] * b[1] - b[0] * a[1]; } return Math.abs(s) / 2; }
+  function startDraw() {
+    if (!session.loggedIn) return;
+    if (drawer) drawer.disable();
+    drawer = new L.Draw.Polygon(map, { allowIntersection:false, showArea:false, shapeOptions:{ color:'#ff9800', weight:3 } });
+    drawer.enable();
+    $('editorBar').style.display = 'flex';
+  }
+  function stopDraw() { if (drawer) { drawer.disable(); drawer = null; } $('editorBar').style.display = 'none'; }
+  $('drawBtn').onclick = startDraw;
+  $('cancelDraw').onclick = stopDraw;
+  $('undoPoint').onclick = () => { if (drawer && drawer.deleteLastVertex) drawer.deleteLastVertex(); };
+  map.on(L.Draw.Event.CREATED, e => {
+    const ll = e.layer.getLatLngs()[0];
+    pendingPts = ll.map(p => [Math.round(p.lng), Math.round(-p.lat)]);
+    stopDraw();
+    const area = Math.round(polyArea(pendingPts));
+    $('claimInfo').textContent = `${pendingPts.length} Eckpunkte · ${area} Blöcke (max. ${cfg.maxClaimAreaBlocks}) · ${DIMS[dim]}`;
+    $('nameErr').textContent = ''; $('claimName').value = '';
+    $('nameModal').classList.add('show'); $('claimName').focus();
+  });
+  $('nameCancel').onclick = () => { pendingPts = null; $('nameModal').classList.remove('show'); };
+  async function submitClaim() {
+    $('nameErr').textContent = '';
+    try {
+      await api('/api/claims/create-web', { method:'POST', body:JSON.stringify({ name:$('claimName').value, dimension:dim, points:pendingPts }) });
+      $('nameModal').classList.remove('show'); pendingPts = null; toast('Claim erstellt ✔'); loadClaims();
+    } catch (e) { $('nameErr').textContent = e.message; }
+  }
+  $('nameSubmit').onclick = submitClaim;
+  $('claimName').addEventListener('keydown', e => { if (e.key === 'Enter') submitClaim(); });
+
+  // ---------- Start ----------
+  (async () => {
+    try { cfg = Object.assign(cfg, await api('/api/config')); } catch (e) {}
+    buildDimButtons();
+    setDim('overworld');
+    await loadSession();
+    loadClaims(); loadPlayers();
+    setInterval(loadPlayers, 2000);
+    setInterval(loadClaims, 15000);
+  })();
+})();
+</script>
+</body>
+</html>
