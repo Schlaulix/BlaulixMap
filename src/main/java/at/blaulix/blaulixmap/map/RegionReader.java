@@ -46,7 +46,6 @@ public final class RegionReader implements Closeable {
         byte[] data = new byte[len - 1];
         raf.readFully(data);
         InputStream in = wrap(comp & 0x7F, data);
-        if (in == null) return null;
         try (in) {
             return Nbt.readRoot(in);
         }
@@ -58,15 +57,18 @@ public final class RegionReader implements Closeable {
             case 1: return new GZIPInputStream(bais);
             case 2: return new InflaterInputStream(bais);
             case 3: return bais;
-            case 4:
-                // LZ4 (optionale Region-Kompression): lz4-java wird von Minecraft mitgeliefert -> per Reflection
+            case 4: {
+                // GEAENDERT: LZ4 wird jetzt mit eigenem Decoder gelesen (kein Reflection-Zugriff mehr noetig)
+                if (Lz4Block.hasMagic(data)) return new ByteArrayInputStream(Lz4Block.decode(data));
+                // Fallback: LZ4-Frame-Format ueber die von Minecraft mitgelieferte lz4-java-Bibliothek
                 try {
-                    Class<?> c = Class.forName("net.jpountz.lz4.LZ4BlockInputStream");
+                    Class<?> c = Class.forName("net.jpountz.lz4.LZ4FrameInputStream");
                     return (InputStream) c.getConstructor(InputStream.class).newInstance(bais);
                 } catch (ReflectiveOperationException ex) {
-                    return null;
+                    throw new IOException("Unbekanntes LZ4-Format in Region-Datei");
                 }
-            default: return null;
+            }
+            default: throw new IOException("Unbekannter Kompressionstyp " + type);
         }
     }
 

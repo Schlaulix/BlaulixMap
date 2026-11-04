@@ -23,6 +23,10 @@ import java.util.stream.Stream;
 public final class TileService implements AutoCloseable {
     public static final int MAX_Z = 4;
     private static final int SIZE = 256;
+    /** NEU: Rand (in Pixeln) um die Kachel, damit die Hangschattierung ueber Kachel-/Region-Grenzen stimmt. */
+    private static final int PAD = SIZE + 16;
+    /** NEU: bei jeder Aenderung am Renderer erhoehen -> alter Kachel-Cache wird verworfen. */
+    private static final int RENDER_VERSION = 2;
 
     /** Moegliche Region-Verzeichnisse je Dimension (altes und neues Welt-Layout). */
     private static final Map<String, String[]> DIM_PATHS = Map.of(
@@ -50,6 +54,29 @@ public final class TileService implements AutoCloseable {
         });
         for (String d : DIM_PATHS.keySet()) indices.put(d, new RegionIndex(d));
         this.emptyPng = encode(new int[SIZE * SIZE]);
+        invalidateOldCache();
+    }
+
+    /** NEU: Kacheln, die mit einer aelteren Renderer-Version erzeugt wurden (fehlerhafte Farben), loeschen. */
+    private void invalidateOldCache() {
+        try {
+            Path vf = cacheDir.resolve("render-version.txt");
+            String cur = Files.exists(vf) ? Files.readString(vf).trim() : "";
+            if (!cur.equals(Integer.toString(RENDER_VERSION))) {
+                for (String d : DIM_PATHS.keySet()) deleteTree(cacheDir.resolve(d));
+                Files.createDirectories(cacheDir);
+                Files.writeString(vf, Integer.toString(RENDER_VERSION));
+            }
+        } catch (IOException e) {
+            System.err.println("[blaulixmap] Cache-Version konnte nicht geprueft werden: " + e);
+        }
+    }
+
+    private static void deleteTree(Path root) throws IOException {
+        if (!Files.exists(root)) return;
+        try (Stream<Path> w = Files.walk(root)) {
+            for (Path p : (Iterable<Path>) w.sorted(java.util.Comparator.reverseOrder())::iterator) Files.deleteIfExists(p);
+        }
     }
 
     /** Dimensionen, fuer die Region-Dateien existieren. */
@@ -123,42 +150,71 @@ public final class TileService implements AutoCloseable {
         return any ? downscale(ch) : null;
     }
 
-    /** Stufe 4: liest 16x16 Chunks aus genau einer Region-Datei und faerbt sie ein. */
+    /**
+     * Stufe 4: liest 16x16 Chunks und faerbt sie ein.
+     * GEAENDERT: Zusaetzlich werden die Nachbar-Chunks links/oberhalb der Kachel gelesen (auch aus
+     * benachbarten Region-Dateien) und in einem Puffer mit Rand gerendert. Dadurch hat die Schattierung an
+     * Kachel- und Region-Grenzen den richtigen Nachbarn (vorher: sichtbare Nahtlinien).
+     * Koordinaten: Welt-Block (X,Z) -> Chunk = X>>4 -> Pixel = (X - Kachel-Ursprung) + 16 Rand.
+     */
     private int[] renderBase(String dim, long bx, long bz, RegionIndex idx) throws IOException {
-        int rx = (int) Math.floorDiv(bx, 512L), rz = (int) Math.floorDiv(bz, 512L);
-        Path region = idx.regionPath(rx, rz);
-        if (region == null || !Files.exists(region)) return null;
+        int rx0 = (int) Math.floorDiv(bx, 512L), rz0 = (int) Math.floorDiv(bz, 512L);
+        Path main = idx.regionPath(rx0, rz0);
+        if (main == null || !Files.exists(main)) return null;
 
         int maxY = dim.equals("nether") ? 120 : 10_000; // Nether: Bedrock-Decke ausblenden
-        int[] px = new int[SIZE * SIZE];
-        int[] hs = new int[SIZE * SIZE];
+        int[] px = new int[PAD * PAD];
+        int[] hs = new int[PAD * PAD];
         java.util.Arrays.fill(hs, Integer.MIN_VALUE);
 
-        try (RegionReader reader = new RegionReader(region)) {
-            for (int cz = 0; cz < 16; cz++) {
-                for (int cx = 0; cx < 16; cx++) {
+        Map<Long, RegionReader> readers = new HashMap<>();
+        int failed = 0;
+        try {
+            for (int cz = -1; cz < 16; cz++) {
+                for (int cx = -1; cx < 16; cx++) {
                     int gcx = (int) (bx >> 4) + cx, gcz = (int) (bz >> 4) + cz;
+                    int rx = gcx >> 5, rz = gcz >> 5; // Region des Chunks (floorDiv durch Shift)
+                    long key = ((long) rx << 32) | (rz & 0xFFFFFFFFL);
+                    RegionReader reader = readers.get(key);
+                    if (reader == null && !readers.containsKey(key)) {
+                        Path rp = idx.regionPath(rx, rz);
+                        try {
+                            reader = (rp != null && Files.exists(rp)) ? new RegionReader(rp) : null;
+                        } catch (IOException e) {
+                            reader = null;
+                        }
+                        readers.put(key, reader);
+                    }
+                    if (reader == null) continue;
                     try {
                         Map<String, Object> chunk = reader.readChunk(gcx & 31, gcz & 31);
-                        if (chunk != null) ChunkSurface.render(chunk, maxY, px, hs, cx * 16, cz * 16, SIZE);
+                        if (chunk != null) ChunkSurface.render(chunk, maxY, px, hs, (cx + 1) * 16, (cz + 1) * 16, PAD);
                     } catch (Exception e) {
-                        // kaputten/halb geschriebenen Chunk ueberspringen
+                        // kaputten/halb geschriebenen Chunk ueberspringen - aber nicht mehr still: einmal pro Kachel melden
+                        if (failed++ == 0) System.err.println("[blaulixmap] Chunk-Fehler in " + dim + " bei Chunk "
+                                + gcx + "," + gcz + ": " + e);
                     }
                 }
             }
+        } finally {
+            for (RegionReader r : readers.values()) if (r != null) { try { r.close(); } catch (IOException ignored) { } }
         }
         shade(px, hs);
-        return px;
+
+        // Rand abschneiden -> endgueltige 256x256-Kachel
+        int[] out = new int[SIZE * SIZE];
+        for (int z = 0; z < SIZE; z++) System.arraycopy(px, (z + 16) * PAD + 16, out, z * SIZE, SIZE);
+        return out;
     }
 
-    /** Einfache Hangschattierung: Licht von Nordwesten, Vergleich mit dem Nachbarpixel. */
+    /** Einfache Hangschattierung: Licht von Nordwesten, Vergleich mit dem Nachbarpixel (inkl. Randpuffer). */
     private static void shade(int[] px, int[] hs) {
-        for (int z = 0; z < SIZE; z++) {
-            for (int x = 0; x < SIZE; x++) {
-                int i = z * SIZE + x;
+        for (int z = 16; z < 16 + SIZE; z++) {
+            for (int x = 16; x < 16 + SIZE; x++) {
+                int i = z * PAD + x;
                 if (px[i] == 0 || hs[i] == Integer.MIN_VALUE) continue;
                 int h = hs[i];
-                int hn = (x > 0 && z > 0) ? hs[i - SIZE - 1] : h;
+                int hn = hs[i - PAD - 1]; // Nachbar nordwestlich (existiert dank Rand immer)
                 if (hn == Integer.MIN_VALUE) hn = h;
                 int d = Math.max(-4, Math.min(4, h - hn));
                 float f = 1f + d * 0.07f;

@@ -8,10 +8,19 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Ordnet Block-IDs Kartenfarben zu. Rueckgabewerte: {@link #SKIP} (wird uebersprungen, z. B. Luft, Gras,
  * Glas), {@link #WATER} (Wasser, wird je nach Tiefe eingefaerbt) oder 0xFFRRGGBB fuer feste Bloecke.
+ *
+ * GEAENDERT (Fehlerbehebung):
+ *  - Keine zufaelligen Hash-Farben mehr (das waren die violetten/bunten Pixel). Unbekannte Bloecke
+ *    bekommen eine neutrale Stein-Farbe.
+ *  - Namen werden normalisiert: Namespace-Praefix und Blockstate-Anhang ("minecraft:stone[...]") entfernt.
+ *  - Fehlende Familien ergaenzt (Korallen, Sculk, Netherite, Lichen, Gitter, ...).
  */
 public final class BlockColors {
     public static final int SKIP = 0;
     public static final int WATER = 1;
+
+    /** Neutrale Fallback-Farbe fuer unbekannte feste Bloecke (Stein-Grau). */
+    private static final int FALLBACK = 0xFF7D7D7D;
 
     private static final Map<String, Integer> EXACT = new HashMap<>();
     private static final Map<String, Integer> CACHE = new ConcurrentHashMap<>();
@@ -23,6 +32,7 @@ public final class BlockColors {
         c("mycelium", 0x6F6265); c("rooted_dirt", 0x90664A); c("dirt_path", 0x947A44); c("farmland", 0x6E4A2E);
         c("mud", 0x3C3A3F); c("packed_mud", 0x8A6A52); c("clay", 0xA0A6B3); c("gravel", 0x837F7E);
         c("sand", 0xDBCF9A); c("suspicious_sand", 0xDBCF9A); c("red_sand", 0xBE6621);
+        c("suspicious_gravel", 0x837F7E);
         c("sandstone", 0xDCCF9B); c("red_sandstone", 0xB5601F);
         c("stone", 0x7D7D7D); c("cobblestone", 0x797979); c("mossy_cobblestone", 0x667A5E);
         c("deepslate", 0x505055); c("tuff", 0x6C6D64); c("andesite", 0x888888); c("diorite", 0xBDBDBD);
@@ -31,6 +41,8 @@ public final class BlockColors {
         c("netherrack", 0x6F3535); c("crimson_nylium", 0x8A2A2A); c("warped_nylium", 0x2B7567);
         c("soul_sand", 0x514033); c("soul_soil", 0x4A3A2F); c("magma_block", 0x8E3F1A);
         c("nether_wart_block", 0x7A1010); c("warped_wart_block", 0x167E86); c("shroomlight", 0xF2994A);
+        c("netherite_block", 0x433D43); c("ancient_debris", 0x5E4237); c("sculk", 0x0D1E24);
+        c("sculk_catalyst", 0x0F2A2E); c("sculk_shrieker", 0x153038); c("sculk_sensor", 0x0F4A56);
         c("end_stone", 0xDDDFA5); c("obsidian", 0x15121F); c("crying_obsidian", 0x2A0B55);
         c("snow", 0xF8FEFE); c("snow_block", 0xF8FEFE); c("powder_snow", 0xF8FEFE);
         c("ice", 0x9DBEFA); c("packed_ice", 0x8DB0F0); c("blue_ice", 0x74A8FD); c("frosted_ice", 0x9DBEFA);
@@ -40,10 +52,14 @@ public final class BlockColors {
         c("melon", 0x6F9A1E); c("cactus", 0x0F7A24); c("sponge", 0xC3C148); c("wet_sponge", 0xA1A33A);
         c("glowstone", 0xFFBC5E); c("sea_lantern", 0xDDE8DA); c("amethyst_block", 0x8561B8);
         c("budding_amethyst", 0x8561B8); c("slime_block", 0x70C05C); c("honey_block", 0xE8A62C);
+        c("honeycomb_block", 0xE5A22B); c("dried_kelp_block", 0x31402A);
         c("bone_block", 0xE1DDC8); c("tnt", 0xC03A2B); c("bookshelf", 0xA0814F);
         c("mushroom_stem", 0xCFC9BD); c("red_mushroom_block", 0xC83B38); c("brown_mushroom_block", 0x947157);
         c("spawner", 0x1B2733); c("pale_moss_block", 0x7A8571); c("pale_moss_carpet", 0x7A8571);
-        c("resin_block", 0xE6781D); c("creaking_heart", 0x6B5A4B);
+        c("resin_block", 0xE6781D); c("creaking_heart", 0x6B5A4B); c("bamboo_block", 0x7F9A3A);
+        c("terracotta", 0x985F45); c("gilded_blackstone", 0x38302F); c("lodestone", 0x949494);
+        c("cauldron", 0x3B3B3B); c("water_cauldron", 0x3B3B3B); c("lava_cauldron", 0x3B3B3B);
+        c("composter", 0x7A5A34); c("beehive", 0xC9A25A); c("bee_nest", 0xC9A25A);
     }
 
     /** Holzarten (Reihenfolge wichtig: laengere/spezifischere Namen zuerst). */
@@ -67,61 +83,80 @@ public final class BlockColors {
             {"brown", "724728"}, {"green", "546D1B"}, {"red", "A12722"}, {"black", "141519"},
     };
 
-    /** Nicht darzustellende Bloecke (Pflanzen, Deko, Transparentes). */
+    /** Korallenbloecke (lebendig). Tote Korallen werden grau dargestellt. */
+    private static final String[][] CORALS = {
+            {"tube", "3257CF"}, {"brain", "CF5C9F"}, {"bubble", "A518A5"}, {"fire", "CF2A2F"}, {"horn", "D1BA32"},
+    };
+
+    /** Nicht darzustellende Bloecke (Pflanzen, Deko, Transparentes) - der Block darunter wird sichtbar. */
     private static final String[] SKIP_WORDS = {
             "fern", "flower", "poppy", "dandelion", "tulip", "orchid", "allium", "bluet", "cornflower",
             "lily", "rose", "peony", "lilac", "sapling", "torch", "rail", "ladder", "vine", "fire", "lantern",
             "sign", "button", "lever", "tripwire", "bush", "dripleaf", "sweet_berry", "petals", "wildflowers",
             "leaf_litter", "hanging_roots", "spore_blossom", "chain", "bell", "cobweb", "string", "barrier",
             "structure_void", "skull", "_head", "glass", "wheat", "carrots", "potatoes", "beetroots",
-            "melon_stem", "pumpkin_stem", "nether_wart", "pointed_dripstone", "candle", "flower_pot", "pressure_plate", "sugar_cane",
-            "bamboo_sapling", "frogspawn", "turtle_egg", "sniffer_egg", "end_rod", "lightning_rod", "banner",
-            "redstone_wire", "repeater", "comparator", "cocoa", "firefly", "eyeblossom", "twisting_vines",
-            "weeping_vines", "crimson_roots", "warped_roots", "nether_sprouts", "open_eyeblossom",
+            "melon_stem", "pumpkin_stem", "nether_wart", "pointed_dripstone", "candle", "flower_pot", "potted",
+            "pressure_plate", "sugar_cane", "frogspawn", "turtle_egg", "sniffer_egg", "end_rod",
+            "lightning_rod", "banner", "redstone_wire", "repeater", "comparator", "cocoa", "firefly",
+            "eyeblossom", "_roots", "nether_sprouts", "lichen", "sculk_vein", "sea_pickle", "propagule",
+            "amethyst_cluster", "_bud", "bars", "grass", "pitcher", "torchflower",
     };
 
     private BlockColors() {}
 
-    /** Klassifiziert einen Block-Namen (mit oder ohne "minecraft:"-Praefix). */
+    /** Klassifiziert einen Block-Namen (mit/ohne "minecraft:"-Praefix und Blockstate-Anhang). */
     public static int of(String id) {
         if (id == null) return SKIP;
         return CACHE.computeIfAbsent(id, BlockColors::compute);
     }
 
     private static int compute(String id) {
-        String n = id.toLowerCase(Locale.ROOT);
+        String n = id.toLowerCase(Locale.ROOT).trim();
+        // NEU: Blockstate-Anhang ("minecraft:oak_log[axis=y]") und Namespace entfernen
+        int br = n.indexOf('[');
+        if (br >= 0) n = n.substring(0, br);
         int colon = n.indexOf(':');
         if (colon >= 0) n = n.substring(colon + 1);
+        if (n.isEmpty()) return SKIP;
+
+        if (n.equals("air") || n.equals("cave_air") || n.equals("void_air") || n.equals("light")) return SKIP;
 
         Integer exact = EXACT.get(n);
         if (exact != null) return exact;
 
-        if (n.equals("air") || n.equals("cave_air") || n.equals("void_air") || n.equals("light")) return SKIP;
+        // Fluessigkeiten und Unterwasserpflanzen
         if (n.equals("water") || n.equals("bubble_column") || n.contains("kelp") || n.contains("seagrass")) return WATER;
-        if (n.equals("grass_block")) return 0xFF62A044;
-        if (n.equals("bamboo") ) return SKIP;
-        if (n.contains("mushroom") && !n.contains("block") && !n.contains("stem")) return SKIP;
-        if (n.equals("short_grass") || n.equals("tall_grass") || n.equals("grass") || n.equals("dead_bush")) return SKIP;
+        if (n.contains("lava")) return 0xFFE5560E;
 
         // Blaetter
         if (n.endsWith("_leaves")) {
             for (String[] l : LEAVES) if (n.contains(l[0])) return 0xFF000000 | Integer.parseInt(l[1], 16);
             return 0xFF4C7A28;
         }
-        if (n.contains("azalea")) return 0xFF000000 | 0x607B2D;
+        if (n.contains("azalea")) return 0xFF607B2D;
 
+        // Korallen: Bloecke sind fest, alles andere (Faecher, Pflanzen) wird uebersprungen
+        if (n.contains("coral_block")) {
+            if (n.startsWith("dead_")) return 0xFF82786F;
+            for (String[] k : CORALS) if (n.contains(k[0])) return 0xFF000000 | Integer.parseInt(k[1], 16);
+            return 0xFF82786F;
+        }
+        if (n.contains("coral")) return SKIP;
+
+        if (n.equals("bamboo") || n.equals("bamboo_sapling")) return SKIP;
+        if (n.contains("mushroom") && !n.contains("block") && !n.contains("stem")) return SKIP;
         for (String w : SKIP_WORDS) if (n.contains(w)) return SKIP;
 
         // Holz
         if (n.contains("planks") || n.contains("log") || n.contains("wood") || n.contains("hyphae")
-                || n.contains("stem") || n.endsWith("_stairs") || n.endsWith("_slab") || n.endsWith("_fence")
-                || n.endsWith("_door") || n.endsWith("_trapdoor") || n.endsWith("_fence_gate")) {
+                || n.contains("stem") || n.contains("mosaic") || n.endsWith("_stairs") || n.endsWith("_slab")
+                || n.endsWith("_fence") || n.endsWith("_door") || n.endsWith("_trapdoor") || n.endsWith("_fence_gate")) {
             for (String[] w : WOODS) if (n.contains(w[0])) return 0xFF000000 | Integer.parseInt(w[1], 16);
         }
 
         // Farbige Bloecke (Wolle, Beton, Terrakotta, ...)
         if (n.contains("wool") || n.contains("concrete") || n.contains("terracotta") || n.contains("carpet")
-                || n.contains("shulker") || n.contains("bed")) {
+                || n.contains("shulker") || n.endsWith("_bed")) {
             for (String[] d : DYES) {
                 if (n.contains(d[0])) {
                     int rgb = Integer.parseInt(d[1], 16);
@@ -139,6 +174,7 @@ public final class BlockColors {
         if (n.contains("end_stone")) return 0xFFDDDFA5;
         if (n.contains("sandstone")) return 0xFFDCCF9B;
         if (n.contains("redstone")) return 0xFFAA0F01;
+        if (n.contains("netherite")) return 0xFF433D43;
         if (n.contains("stone") || n.contains("cobble")) return 0xFF7D7D7D;
         if (n.contains("brick")) return 0xFF96594B;
         if (n.contains("copper")) return 0xFFC06B4E;
@@ -155,12 +191,12 @@ public final class BlockColors {
         if (n.contains("dirt")) return 0xFF866043;
         if (n.contains("ice")) return 0xFF9DBEFA;
         if (n.contains("snow")) return 0xFFF8FEFE;
-        if (n.contains("lava")) return 0xFFE5560E;
+        if (n.contains("moss")) return 0xFF596D2D;
+        if (n.contains("amethyst")) return 0xFF8561B8;
+        if (n.contains("bamboo")) return 0xFFC9B04D;
 
-        // Fallback: stabile Farbe aus dem Namen
-        int h = n.hashCode();
-        float hue = ((h >>> 3) & 0x3FF) / 1024f;
-        return 0xFF000000 | (java.awt.Color.HSBtoRGB(hue, 0.35f, 0.65f) & 0xFFFFFF);
+        // GEAENDERT: neutraler Fallback statt zufaelliger Hash-Farbe
+        return FALLBACK;
     }
 
     private static int darken(int rgb, float f) {

@@ -1,5 +1,5 @@
-
 plugins {
+    // Nicht-remappendes Loom fuer Minecraft 26.x (unobfuskiert)
     id 'net.fabricmc.fabric-loom' version '1.18.2'
     id 'maven-publish'
 }
@@ -12,19 +12,17 @@ base {
 }
 
 repositories {
+    // Loom fuegt Mojang- und Fabric-Maven automatisch hinzu
 }
 
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-
-    // Minecraft 26.3: Non-Remapping Loom
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
 
 processResources {
     inputs.property "version", project.version
-
     filesMatching("fabric.mod.json") {
         expand "version": inputs.properties.version
     }
